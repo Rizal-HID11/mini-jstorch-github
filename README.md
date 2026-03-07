@@ -61,146 +61,55 @@ In Browser/Website:
 ```html
 <!DOCTYPE html>
 <html>
-<body>
-    <div id="output">
-        <p>Status: <span id="status">Initializing...</span></p>
-        <div id="training-log"></div>
-        <div id="results" style="margin-top: 20px;"></div>
-    </div>
+<body style="font-family:monospace; padding:20px;">
+    <h3>mini-jstorch XOR Demo</h3>
+    <div id="status">Initializing...</div>
+    <pre id="log" style="background:#eee; padding:10px;"></pre>
+    <div id="res"></div>
 
     <script type="module">
-        import { Sequential, Linear, ReLU, MSELoss, Adam, StepLR, Tanh } from 'https://unpkg.com/jstorch'; // DO NOT CHANGE
+        import { Sequential, Linear, ReLU, MSELoss, Adam, StepLR, Tanh } from 'https://unpkg.com/mini-jstorch@1.8.0/index.js';
         
-        const statusEl = document.getElementById('status');
-        const trainingLogEl = document.getElementById('training-log');
-        const resultsEl = document.getElementById('results');
-        
-        async function trainModel() {
+        async function train() {
+            const statusEl = document.getElementById('status');
+            const logEl = document.getElementById('log');
+            
             try {
-                statusEl.textContent = 'Creating model...';
-                
                 const model = new Sequential([
-                    new Linear(2, 16),
-                    new Tanh(),
-                    new Linear(16, 8),
-                    new ReLU(),
+                    new Linear(2, 16), new Tanh(),
+                    new Linear(16, 8), new ReLU(),
                     new Linear(8, 1)
                 ]);
 
                 const X = [[0,0], [0,1], [1,0], [1,1]];
                 const y = [[0], [1], [1], [0]];
-
                 const criterion = new MSELoss();
                 const optimizer = new Adam(model.parameters(), 0.1);
                 const scheduler = new StepLR(optimizer, 25, 0.5);
 
-                trainingLogEl.innerHTML = '<h4>Training Progress:</h4>';
-                const logList = document.createElement('ul');
-                trainingLogEl.appendChild(logList);
-
-                statusEl.textContent = 'Training...';
-                
-                for (let epoch = 0; epoch < 1000; epoch++) {
-                    const pred = model.forward(X);
-                    const loss = criterion.forward(pred, y);
-                    const grad = criterion.backward();
-                    model.backward(grad);
+                for (let epoch = 0; epoch <= 1000; epoch++) {
+                    const loss = criterion.forward(model.forward(X), y);
+                    model.backward(criterion.backward());
                     optimizer.step();
                     scheduler.step();
                     
-                    if (epoch % 100 === 0) {
-                        const logItem = document.createElement('li');
-                        logItem.textContent = `Epoch ${epoch}: Loss = ${loss.toFixed(6)}`;
-                        logList.appendChild(logItem);
-                        
-                        // Update status every 100 epochs
-                        statusEl.textContent = `Training... Epoch ${epoch}/1000 (Loss: ${loss.toFixed(6)})`;
-
-                        await new Promise(resolve => setTimeout(resolve, 10));
+                    if (epoch % 200 === 0) {
+                        logEl.textContent += `Epoch ${epoch} | Loss: ${loss.toFixed(6)}\n`;
+                        statusEl.textContent = `Training: ${epoch}/1000`;
+                        await new Promise(r => setTimeout(r, 1));
                     }
                 }
 
-                statusEl.textContent = 'Training completed!';
-                statusEl.style.color = 'green';
+                statusEl.textContent = '✅ Done';
+                const preds = model.forward(X);
+                document.getElementById('res').innerHTML = `<h4>Results:</h4>` + 
+                    X.map((input, i) => `[${input}] -> <b>${preds[i][0].toFixed(4)}</b> (Target: ${y[i][0]})`).join('<br>');
 
-                resultsEl.innerHTML = '<h4>XOR Predictions:</h4>';
-                const resultsTable = document.createElement('table');
-                resultsTable.style.border = '1px solid #ccc';
-                resultsTable.style.borderCollapse = 'collapse';
-                resultsTable.style.width = '300px';
-                
-                // Table header
-                const headerRow = document.createElement('tr');
-                ['Input A', 'Input B', 'Prediction', 'Target'].forEach(text => {
-                    const th = document.createElement('th');
-                    th.textContent = text;
-                    th.style.border = '1px solid #ccc';
-                    th.style.padding = '8px';
-                    headerRow.appendChild(th);
-                });
-                resultsTable.appendChild(headerRow);
-                
-                const predictions = model.forward(X);
-                predictions.forEach((pred, i) => {
-                    const row = document.createElement('tr');
-                    
-                    const cell1 = document.createElement('td');
-                    cell1.textContent = X[i][0];
-                    cell1.style.border = '1px solid #ccc';
-                    cell1.style.padding = '8px';
-                    cell1.style.textAlign = 'center';
-                    
-                    const cell2 = document.createElement('td');
-                    cell2.textContent = X[i][1];
-                    cell2.style.border = '1px solid #ccc';
-                    cell2.style.padding = '8px';
-                    cell2.style.textAlign = 'center';
-                    
-                    const cell3 = document.createElement('td');
-                    cell3.textContent = pred[0].toFixed(4);
-                    cell3.style.border = '1px solid #ccc';
-                    cell3.style.padding = '8px';
-                    cell3.style.textAlign = 'center';
-                    cell3.style.fontWeight = 'bold';
-                    cell3.style.color = Math.abs(pred[0] - y[i][0]) < 0.1 ? 'green' : 'red';
-                    
-                    const cell4 = document.createElement('td');
-                    cell4.textContent = y[i][0];
-                    cell4.style.border = '1px solid #ccc';
-                    cell4.style.padding = '8px';
-                    cell4.style.textAlign = 'center';
-                    
-                    row.appendChild(cell1);
-                    row.appendChild(cell2);
-                    row.appendChild(cell3);
-                    row.appendChild(cell4);
-                    resultsTable.appendChild(row);
-                });
-                
-                resultsEl.appendChild(resultsTable);
-
-                const summary = document.createElement('div');
-                summary.style.marginTop = '20px';
-                summary.style.padding = '10px';
-                summary.style.backgroundColor = '#f0f0f0';
-                summary.style.borderRadius = '5px';
-                summary.innerHTML = `
-                    <p><strong>Model Architecture:</strong> 2 → 16 → 8 → 1</p>
-                    <p><strong>Activation:</strong> Tanh → ReLU</p>
-                    <p><strong>Loss Function:</strong> MSE</p>
-                    <p><strong>Optimizer:</strong> Adam (LR: 0.1)</p>
-                    <p><strong>Epochs:</strong> 1000</p>
-                `;
-                resultsEl.appendChild(summary);
-                
-            } catch (error) {
-                statusEl.textContent = `Error: ${error.message}`;
-                statusEl.style.color = 'red';
-                console.error(error);
+            } catch (e) {
+                statusEl.textContent = '❌ Error: ' + e.message;
             }
         }
-
-        trainModel();
+        train();
     </script>
 </body>
 </html>
