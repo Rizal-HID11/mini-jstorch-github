@@ -10,6 +10,7 @@ In this version `1.8.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCE
 
 # NOTICE
 All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/mini-jstorch` with some minor refactoring.
+
 **WARNING:** Expect potential compatibility issues in certain modules when running in the GitHub environment.
 
 ---
