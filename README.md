@@ -30,8 +30,7 @@ In this version `1.8.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCE
 # Key Characteristics
 
 - Zero dependencies
-- ESM-first (`type: module`)
-- Works in Node.js and browser environments
+- Works in Node.js or others enviornments and browser environments
 - Explicit, manual forward and backward passes
 - Focused on 2D training logic (`[batch][features]`)
 - Designed for educational and experimental use
