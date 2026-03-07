@@ -8,6 +8,10 @@ This project prioritizes `clarity`, `numerical correctness`, and `accessibility`
 
 In this version `1.8.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCEWithLogitsLoss**
 
+# NOTICE
+All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/mini-jstorch` with some minor refactoring.
+**WARNING:** Expect potential compatibility issues in certain modules when running in the GitHub environment.
+
 ---
 
 # Overview
