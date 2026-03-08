@@ -6,7 +6,7 @@ It runs in Node.js and modern browsers, with a simple API inspired by PyTorch-st
 
 This project prioritizes `clarity`, `numerical correctness`, and `accessibility` over performance or large-scale production use.
 
-In this version `1.8.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCEWithLogitsLoss**
+In this version `1.0.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCEWithLogitsLoss**
 
 # NOTICE
 All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/mini-jstorch` with some minor refactoring.
@@ -26,9 +26,7 @@ All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/min
 - running simple training loops in the browser
 - environments where large frameworks are unnecessary or unavailable
 
-`Mini-JSTorch is NOT a replacement for PyTorch, TensorFlow, or TensorFlow.js.`
-
-`It is intentionally scoped to remain small, readable, and easy to debug.`
+`mini-jstorch is intentionally designed to be small, readable, and easy to debug.`
 
 ---
 
