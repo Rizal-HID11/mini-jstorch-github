@@ -29,7 +29,7 @@
 // See the Documentation for more details.
 // --------------------------------------------------------------
 
-// ---------------------- DONOT USE THESE (ENGINE INTERNALS) ERROR/BUG ARE EXPECTED ----------------------
+// ---------------------- Engine-only Utils ----------------------
 export function zeros(rows, cols) { 
     return Array.from({length:rows},()=>Array(cols).fill(0)); 
 }
@@ -235,17 +235,111 @@ export function fu_stack(tensors) {
 
 // ---------------------- Tensor ----------------------
 export class Tensor {
-    constructor(data){ this.data=data; this.grad=zeros(data.length,data[0].length); }
-    shape(){ return [this.data.length,this.data[0].length]; }
-    add(t){ return t instanceof Tensor?this.data.map((r,i)=>r.map((v,j)=>v+t.data[i][j])):this.data.map(r=>r.map(v=>v+t)); }
-    sub(t){ return t instanceof Tensor?this.data.map((r,i)=>r.map((v,j)=>v-t.data[i][j])):this.data.map(r=>r.map(v=>v-t)); }
-    mul(t){ return t instanceof Tensor?this.data.map((r,i)=>r.map((v,j)=>v*t.data[i][j])):this.data.map(r=>r.map(v=>v*t)); }
-    matmul(t){ if(t instanceof Tensor) return dot(this.data,t.data); else throw new Error("matmul requires Tensor"); }
-    transpose(){ return transpose(this.data); }
-    flatten(){ return this.data.flat(); }
-    static zeros(r,c){ return new Tensor(zeros(r,c)); }
-    static ones(r,c){ return new Tensor(ones(r,c)); }
-    static random(r,c,scale=0.1){ return new Tensor(randomMatrix(r,c,scale)); }
+    constructor(data, requiresGrad = false){
+        this.data = data;
+        this.rows = data.length;
+        this.cols = data[0].length;
+        this.grad = zeros(this.rows, this.cols);
+        this.requiresGrad = requiresGrad;
+        
+        this._dataFlat = null;
+        this._gradFlat = null;
+    }
+    
+    shape(){ 
+        return [this.rows, this.cols]; 
+    }
+    
+    _getDataFlat() {
+        if (!this._dataFlat) {
+            this._dataFlat = new Float32Array(this.rows * this.cols);
+            for (let i = 0; i < this.rows; i++) {
+                const offset = i * this.cols;
+                const row = this.data[i];
+                for (let j = 0; j < this.cols; j++) {
+                    this._dataFlat[offset + j] = row[j];
+                }
+            }
+        }
+        return this._dataFlat;
+    }
+    
+    _getGradFlat() {
+        if (!this._gradFlat) {
+            this._gradFlat = new Float32Array(this.rows * this.cols);
+            for (let i = 0; i < this.rows; i++) {
+                const offset = i * this.cols;
+                const row = this.grad[i];
+                for (let j = 0; j < this.cols; j++) {
+                    this._gradFlat[offset + j] = row[j];
+                }
+            }
+        }
+        return this._gradFlat;
+    }
+    
+    add(t){ 
+        if (t instanceof Tensor) {
+            const result = Array(this.rows);
+            const aFlat = this._getDataFlat();
+            const bFlat = t._getDataFlat();
+            for (let i = 0; i < this.rows; i++) {
+                result[i] = Array(this.cols);
+                const offset = i * this.cols;
+                for (let j = 0; j < this.cols; j++) {
+                    result[i][j] = aFlat[offset + j] + bFlat[offset + j];
+                }
+            }
+            return new Tensor(result);
+        } else {
+            const res = this.data.map(r => r.map(v => v + t));
+			return new Tensor(res);
+        }
+    }
+    
+    mul(t){ 
+        if (t instanceof Tensor) {
+            const result = Array(this.rows);
+            const aFlat = this._getDataFlat();
+            const bFlat = t._getDataFlat();
+            for (let i = 0; i < this.rows; i++) {
+                result[i] = Array(this.cols);
+                const offset = i * this.cols;
+                for (let j = 0; j < this.cols; j++) {
+                    result[i][j] = aFlat[offset + j] * bFlat[offset + j];
+                }
+            }
+            return new Tensor(result);
+        } else {
+            const res = this.data.map(r => r.map(v => v * t));
+			return new Tensor(res);
+        }
+    }
+    
+    matmul(t){ 
+        if (!(t instanceof Tensor)) throw new Error("matmul requires Tensor");
+        return new Tensor(dot(this.data, t.data));
+    }
+    
+    transpose(){ 
+        return new Tensor(transpose(this.data)); 
+    }
+    
+    flatten(){ 
+        return this.data.flat(); 
+    }
+    
+    static zeros(r,c){ 
+        return new Tensor(zeros(r,c)); 
+    }
+    
+    static ones(r,c){ 
+        return new Tensor(ones(r,c)); 
+    }
+    
+    static random(r,c,scale=0.1){ 
+        return new Tensor(randomMatrix(r,c,scale)); 
+    }
 }
 
 // ---------------------- Layers ----------------------
@@ -256,58 +350,175 @@ export class Linear {
         this.gradW = zeros(inputDim, outputDim);
         this.gradb = Array(outputDim).fill(0);
         this.x = null;
-        this.originalShape = null; // Track input shape
+        this.originalShape = null;
+        
+        this._WFlat = null;
+        this._bFlat = null;
     }
+	
+	_updateCache() {
+		const rows = this.W.length;
+		const cols = this.W[0].length;
+		this._WFlat = new Float32Array(rows * cols);
+		for (let i = 0; i < rows; i++){
+			const offset = i * cols;
+			const row = this.W[i];
+			for (let j = 0; j < cols; j++){
+				this._WFlat[offset + j] = row[j];
+			}
+		}
+		this._bFlat = new Float32Array(this.b);
+	}
 
     forward(x){
-        // Handle both [batch, features] and [batch, 1, features]
         this.originalShape = this._getShapeType(x);
         
         if (this.originalShape === '3d') {
-            // Convert from [batch, 1, features] to [batch, features]
             this.x = x.map(sample => sample[0]);
         } else {
-            // Already in [batch, features] format
             this.x = x;
         }
+		
+		this._updateCache();
+		
+		const m = this.x.length;
+		const k = this.x[0].length;
+		const n = this.W[0].length;
         
-        const out = dot(this.x, this.W);
-        return out.map((row, i) => row.map((v, j) => v + this.b[j]));
+        if (!this._WFlat) {
+            const rows = this.W.length;
+            const cols = this.W[0].length;
+            this._WFlat = new Float32Array(rows * cols);
+            for (let i = 0; i < rows; i++) {
+                const offset = i * cols;
+                const row = this.W[i];
+                for (let j = 0; j < cols; j++) {
+                    this._WFlat[offset + j] = row[j];
+                }
+            }
+            this._bFlat = new Float32Array(this.b);
+        }
+        
+        // Flatten input x to Float32Array
+        const xFlat = new Float32Array(m * k);
+        for (let i = 0; i < m; i++) {
+            const row = this.x[i];
+            const offset = i * k;
+            for (let j = 0; j < k; j++) {
+                xFlat[offset + j] = row[j];
+            }
+        }
+        
+        const outFlat = new Float32Array(m * n);
+        for (let i = 0; i < m; i++) {
+            const xOffset = i * k;
+            for (let j = 0; j < n; j++) {
+                let sum = 0;
+                for (let l = 0; l < k; l++) {
+                    sum += xFlat[xOffset + l] * this._WFlat[l * n + j];
+                }
+                outFlat[i * n + j] = sum + this._bFlat[j];
+            }
+        }
+        
+        const out = Array(m);
+        for (let i = 0; i < m; i++) {
+            const row = Array(n);
+            const offset = i * n;
+            for (let j = 0; j < n; j++) {
+                row[j] = outFlat[offset + j];
+            }
+            out[i] = row;
+        }
+        
+        return out;
     }
 
     backward(grad){
-        // Compute gradients
-        for(let i = 0; i < this.W.length; i++) {
-            for(let j = 0; j < this.W[0].length; j++) {
-                this.gradW[i][j] = this.x.reduce((sum, row, k) => sum + row[i] * grad[k][j], 0);
-            }
-        }
-        
-        for(let j = 0; j < this.b.length; j++) {
-            this.gradb[j] = grad.reduce((sum, row) => sum + row[j], 0);
-        }
-
-        const gradInput = zeros(this.x.length, this.W.length);
-        for(let i = 0; i < this.x.length; i++) {
-            for(let j = 0; j < this.W.length; j++) {
-                for(let k = 0; k < this.W[0].length; k++) {
-                    gradInput[i][j] += grad[i][k] * this.W[j][k];
-                }
-            }
-        }
-        
-        //Convert back to original shape if needed
-        if (this.originalShape === '3d') {
-            return gradInput.map(row => [row]); // Back to [batch, 1, features]
-        }
-        return gradInput;
-    }
+		const m = this.x.length;
+		const k = this.W.length;      // input dim
+		const n = this.W[0].length;   // output dim
+    
+		// Convert grad to Float32Array
+		const gradFlat = new Float32Array(m * n);
+		for (let i = 0; i < m; i++) {
+			const row = grad[i];
+			const offset = i * n;
+			for (let j = 0; j < n; j++) {
+				gradFlat[offset + j] = row[j];
+			}
+		}
+    
+		// Convert x to Float32Array
+		const xFlat = new Float32Array(m * k);
+		for (let i = 0; i < m; i++) {
+			const row = this.x[i];
+			const offset = i * k;
+			for (let j = 0; j < k; j++) {
+				xFlat[offset + j] = row[j];
+			}
+		}
+    
+		// Reset gradW
+		for (let i = 0; i < this.gradW.length; i++) {
+			for (let j = 0; j < this.gradW[0].length; j++) {
+				this.gradW[i][j] = 0;
+			}
+		}
+    
+		// Compute gradW = x^T * grad
+		for (let i = 0; i < k; i++) {
+			for (let j = 0; j < n; j++) {
+				let sum = 0;
+				for (let batch = 0; batch < m; batch++) {
+					sum += xFlat[batch * k + i] * gradFlat[batch * n + j];
+				}
+				this.gradW[i][j] = sum;
+			}
+		}
+    
+		// Compute gradb
+		for (let j = 0; j < n; j++) {
+			let sum = 0;
+			for (let batch = 0; batch < m; batch++) {
+				sum += gradFlat[batch * n + j];
+			}
+			this.gradb[j] = sum;
+		}
+    
+		const gradInputFlat = new Float32Array(m * k);
+		for (let i = 0; i < m; i++) {
+			for (let j = 0; j < k; j++) {
+				let sum = 0;
+				for (let l = 0; l < n; l++) {
+					sum += gradFlat[i * n + l] * this.W[j][l];
+				}
+				gradInputFlat[i * k + j] = sum;
+			}
+		}
+    
+		// Convert back to 2D array
+		const gradInput = Array(m);
+		for (let i = 0; i < m; i++) {
+			const row = Array(k);
+			const offset = i * k;
+			for (let j = 0; j < k; j++) {
+				row[j] = gradInputFlat[offset + j];
+			}
+			gradInput[i] = row;
+		}
+    
+		if (this.originalShape === '3d') {
+			return gradInput.map(row => [row]);
+		}
+		return gradInput;
+	}
 
     _getShapeType(x) {
         if (Array.isArray(x[0]) && Array.isArray(x[0][0]) && !Array.isArray(x[0][0][0])) {
-            return '3d'; // [batch, 1, features]
+            return '3d';
         } else if (Array.isArray(x[0]) && !Array.isArray(x[0][0])) {
-            return '2d'; // [batch, features]  
+            return '2d';
         } else {
             throw new Error(`Unsupported input shape for Linear layer`);
         }
@@ -405,7 +616,7 @@ export class Flatten {
     parameters() { return []; }
 }
 
-// ---------------------- Conv2D ----------------------
+// ---------------------- Conv2D (BETA) ----------------------
 export class Conv2D {
     constructor(inC, outC, kernel, stride=1, padding=0){
         this.inC = inC; 
@@ -420,10 +631,31 @@ export class Conv2D {
             Array(inC).fill().map(() => zeros(kernel, kernel))
         );
         this.x = null;
+        
+        // Cache Float32Array untuk kernels
+        this._WFlat = null;
+        this._cacheKernels();
+    }
+    
+    _cacheKernels() {
+        this._WFlat = this.W.map(oc => 
+            oc.map(ic => {
+                const rows = ic.length;
+                const cols = ic[0].length;
+                const flat = new Float32Array(rows * cols);
+                for (let i = 0; i < rows; i++) {
+                    const offset = i * cols;
+                    const row = ic[i];
+                    for (let j = 0; j < cols; j++) {
+                        flat[offset + j] = row[j];
+                    }
+                }
+                return flat;
+            })
+        );
     }
 
     pad2D(input, pad){
-        // Input is single channel [height, width]
         if (!input || !input.length) return input;
         
         const rows = input.length + 2 * pad;
@@ -431,26 +663,31 @@ export class Conv2D {
         const out = Array.from({length: rows}, () => Array(cols).fill(0));
         
         for(let i = 0; i < input.length; i++) {
+            const row = input[i];
+            const outRow = out[i + pad];
             for(let j = 0; j < input[0].length; j++) {
-                out[i + pad][j + pad] = input[i][j];
+                outRow[j + pad] = row[j];
             }
         }
         return out;
     }
 
-    conv2DSingle(input, kernel) {
-        const rows = Math.floor((input.length - kernel.length) / this.stride) + 1;
-        const cols = Math.floor((input[0].length - kernel[0].length) / this.stride) + 1;
-        const out = zeros(rows, cols);
+    conv2DSingle(input, kernelFlat, kH, kW) {
+        const rows = Math.floor((input.length - kH) / this.stride) + 1;
+        const cols = Math.floor((input[0].length - kW) / this.stride) + 1;
+        const out = Array(rows);
         
         for(let i = 0; i < rows; i++) {
+            out[i] = Array(cols);
             for(let j = 0; j < cols; j++) {
                 let sum = 0;
-                for(let ki = 0; ki < kernel.length; ki++) {
-                    for(let kj = 0; kj < kernel[0].length; kj++) {
-                        const inputRow = i * this.stride + ki;
+                for(let ki = 0; ki < kH; ki++) {
+                    const inputRow = i * this.stride + ki;
+                    const rowOffset = ki * kW;
+                    const inputRowData = input[inputRow];
+                    for(let kj = 0; kj < kW; kj++) {
                         const inputCol = j * this.stride + kj;
-                        sum += input[inputRow][inputCol] * kernel[ki][kj];
+                        sum += inputRowData[inputCol] * kernelFlat[rowOffset + kj];
                     }
                 }
                 out[i][j] = sum;
@@ -461,6 +698,9 @@ export class Conv2D {
 
     forward(batch) {
         this.x = batch;
+        const kH = this.kernel;
+        const kW = this.kernel;
+        
         return batch.map(sample => {
             const channelsOut = [];
             for(let oc = 0; oc < this.outC; oc++) {
@@ -471,7 +711,7 @@ export class Conv2D {
                         inputChan = this.pad2D(inputChan, this.padding);
                     }
                     
-                    const conv = this.conv2DSingle(inputChan, this.W[oc][ic]);
+                    const conv = this.conv2DSingle(inputChan, this._WFlat[oc][ic], kH, kW);
                     
                     if(outChan === null) {
                         outChan = conv;
@@ -487,7 +727,7 @@ export class Conv2D {
 
     backward(grad) {
         const batchSize = this.x.length;
-        const gradW = this.W.map(oc => oc.map(ic => zeros(this.kernel, this.kernel)));
+        const gradW = this.gradW.map(oc => oc.map(ic => zeros(this.kernel, this.kernel)));
         const gradInput = this.x.map(sample => 
             sample.map(chan => zeros(chan.length, chan[0].length))
         );
@@ -549,10 +789,109 @@ export class Conv2D {
 
 // ---------------------- Sequential ----------------------
 export class Sequential {
-    constructor(layers=[]){ this.layers=layers; }
-    forward(x){ return this.layers.reduce((acc,l)=>l.forward(acc), x); }
-    backward(grad){ return this.layers.reduceRight((g,l)=>l.backward(g), grad); }
-    parameters(){ return this.layers.flatMap(l=>l.parameters?l.parameters():[]); }
+	constructor(layers=[]) {
+		this.layers = layers;
+	}
+	
+	forward(x){
+		return this.layers.reduce((acc, l) => l.forward(acc), x);
+	}
+	
+	backward(grad){
+		return this.layers.reduceRight((g, l) => l.backward(g), grad);
+	}
+	
+	parameters(){
+		return this.layers.flatMap(l => l.parameters ? l.parameters() : []);
+	}
+	
+	/**
+	* Zero out all gradients of all parameters 
+	*/
+	zeroGrad(){
+		const params = this.parameters();
+		
+		for (const p of params){
+			if (!p.grad) continue;
+			
+			// Handle different gradient shapes 
+			if (Array.isArray(p.grad)){
+				// Check if it's 1D or 2D array 
+				if (p.grad.length > 0 && Array.isArray(p.grad[0])){
+					// 2D Gradient (weights)
+			        for (let i = 0; i < p.grad.length; i++){
+						const row = p.grad[i];
+						for (let j = 0; j < row.length; j++){
+							row[j] = 0;
+						}
+					}
+				} else {
+					// 1D Gradient (bias)
+					for (let i = 0; i < p.grad.length; i++){
+						p.grad[i] = 0;
+					}
+				}
+			} else if (typeof p.grad === 'number'){
+				// Scalar gradient (rare case)
+				p.grad = 0;
+			}
+		}
+		
+		return this; // Allow chaining 
+	}
+	
+	/**
+	* Train mode (enable dropout, batch norm, etc.)
+	*/
+	train(){
+		this.layers.forEach(layer => {
+			if (layer.train) layer.train();
+		});
+		return this;
+	}
+	
+	/**
+	* Eval mode (disable dropout, batch norm, etc.)
+	*/
+	eval(){
+		this.layers.forEach(layer => {
+			if (layer.eval) layer.eval();
+		});
+		return this; 
+	}
+	
+	/**
+	* Get model state dict (weights and biases)
+	*/ 
+	stateDict(){
+		const state = {};
+		this.layers.forEach((layer, idx) => {
+			if (layer.W) state[`layer_${idx}.weight`] = layer.W;
+			if (layer.b) state[`layer_${idx}.bias`] = layer.b;
+		});
+		return state;
+	}
+	
+	/**
+	* Load state dict 
+	*/
+	loadStateDict(stateDict){
+		this.layers.forEach((layer, idx) => {
+			const weightKey = `layer_${idx}.weight`;
+			const biasKey = `layer_${idx}.bias`;
+			
+			if (layer.W && stateDict[weightKey]){
+				layer.W = stateDict[weightKey];
+				// Invalidate cache 
+				if (layer._InvalidateCache) layer._InvalidateCache();
+			}
+			if (layer.b && stateDict[biasKey]){
+				layer.b = stateDict[biasKey];
+				if (layer._InvalidateCache) layer._InvalidateCache();
+			}
+		});
+		return this;
+	}
 }
 
 // ---------------------- Activations ----------------------
@@ -606,42 +945,35 @@ export class Softmax {
 
     forward(x) {
         this.input = x;
-        
-        // x: [batch_size, num_classes]
-        this.output = x.map(row => {
-            const maxVal = Math.max(...row);
-            const exps = row.map(v => Math.exp(v - maxVal));
-            const sumExps = exps.reduce((a, b) => a + b, 0);
-            return exps.map(v => v / sumExps);
-        });
-        return this.output;
+		
+		// x: [batch_size, num_Classes]
+		this.output = x.map(row => {
+			const maxVal = Math.max(...row);
+			const exps = row.map(v => Math.exp(v - maxVal));
+			const sumExps = exps.reduce((a, b) => a + b, 0);
+			return exps.map(v => v / sumExps);
+		});
+		return this.output;
     }
 
     backward(grad) {
-        // grad: [batch_size, num_classes] - gradient from next layer
-        const batchSize = grad.length;
-        const numClasses = grad[0].length;
-        
-        const gradInput = zeros(batchSize, numClasses);
-        
-        for (let i = 0; i < batchSize; i++) {
-            const s = this.output[i]; // Softmax output for this sample
-            const gradOut = grad[i];  // Gradient from loss
-            
-            // Compute Jacobian matrix: J_ij = s_i * (δ_ij - s_j)
-            for (let j = 0; j < numClasses; j++) {
-                let sum = 0;
-                for (let k = 0; k < numClasses; k++) {
-                    // J[j][k] = s[j] * ((j === k ? 1 : 0) - s[k])
-                    const jacobian = s[j] * ((j === k ? 1 : 0) - s[k]);
-                    sum += jacobian * gradOut[k];
-                }
-                gradInput[i][j] = sum;
-            }
-        }
-        
-        return gradInput;
-    }
+		const batchSize = grad.length;
+		const numClasses = grad[0].length;
+		const gradInput = zeros(batchSize, numClasses);
+		
+		for (let i = 0; i < batchSize; i++){
+			const s = this.output[i]; // Softmax output 
+			const gradOut = grad[i]; // Gradient from next layer 
+			
+			const dot = s.reduce((sum, val, k) => sum + val * gradOut[k], 0);
+			
+			for (let j = 0; j < numClasses; j++){
+				gradInput[i][j] = s[j] * (gradOut[j] - dot);
+			}
+		}
+		
+		return gradInput;
+	}
 
     parameters() {
         return []; // Softmax has no trainable parameters
@@ -650,90 +982,209 @@ export class Softmax {
 
 // ---------------------- Tokenizer ----------------------
 export class Tokenizer {
-    constructor(vocabSize = 2000){
+    constructor(vocabSize = 2000) {
         this.vocabSize = vocabSize;
         this.wordToIndex = new Map();
         this.indexToWord = new Map();
         this.fitted = false;
+        this.wordCounts = null;
+        
+        // Special tokens
+        this.PAD_TOKEN = '<PAD>';
+        this.UNK_TOKEN = '<UNK>';
+        this.PAD_INDEX = 0;
+        this.UNK_INDEX = 1;
     }
 
-    fit(texts){
-        const wordCounts = new Map();
-
-        // Count word frequencies from all texts
-        texts.forEach(text => {
-            const words = this._preprocess(text);
-            words.forEach(word => {
-                wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
-            });
-        });
-
-        // Sort by frequency and take top words
-        const sortedWords = [...wordCounts.entries()]
-            .sort((a, b) => a[1] - a[1])
-            .slice(0, this.vocabSize - 1); // Reverse 1 for unknown
-
-        // Build vocabulary
+    /**
+     * Fit tokenizer on a list of texts
+     * @param {string[]} texts - Array of text strings
+     * @returns {Tokenizer} this
+     */
+    fit(texts) {
+        this.wordCounts = new Map();
         this.wordToIndex.clear();
         this.indexToWord.clear();
+        
+        // Count word frequencies
+        texts.forEach(text => {
+            const words = this._tokenize(text);
+            words.forEach(word => {
+                this.wordCounts.set(word, (this.wordCounts.get(word) || 0) + 1);
+            });
+        });
+        
+        const sortedWords = [...this.wordCounts.entries()]
+            .sort((a, b) => b[1] - a[1])  // Descending: most frequent first
+            .slice(0, this.vocabSize - 2)  // -2 for PAD and UNK
+            .map(([word]) => word);
 
-        // Add unk token
-        this.wordToIndex.set('<UNK>', 0);
-        this.indexToWord.set(0, '<UNK>');
-
-        // Add most frequent words
-        sortedWords.forEach(([word], index) =>{
-            this.wordToIndex.set(word, index + 1);
-            this.indexToWord.set(index + 1, word);
-        })
-
+        // Index 0 = <PAD> (padding)
+        this.wordToIndex.set(this.PAD_TOKEN, this.PAD_INDEX);
+        this.indexToWord.set(this.PAD_INDEX, this.PAD_TOKEN);
+        
+        // Index 1 = <UNK> (unknown)
+        this.wordToIndex.set(this.UNK_TOKEN, this.UNK_INDEX);
+        this.indexToWord.set(this.UNK_INDEX, this.UNK_TOKEN);
+        
+        sortedWords.forEach((word, idx) => {
+            const index = idx + 2;  // Start from index 2
+            this.wordToIndex.set(word, index);
+            this.indexToWord.set(index, word);
+        });
+        
         this.fitted = true;
         return this;
     }
-
-    tokenize(text){
-        if (!this.fitted) throw new Error("Tokenizer not fitted. Call fit() first.");
-
-        const words = this._preprocess(text);
-        return words.map(word => this.wordToIndex.get(word) || 0);
+    
+    /**
+     * Fit and transform in one step
+     * @param {string[]} texts - Array of text strings
+     * @param {number|null} maxLength - Pad/truncate to this length
+     * @param {boolean} padToMax - Whether to pad to maxLength (default: true)
+     * @returns {number[][]} Tokenized sequences
+     */
+    fitTransform(texts, maxLength = null, padToMax = true) {
+        this.fit(texts);
+        return this.transform(texts, maxLength, padToMax);
     }
-
-    tokenizeBatch(texts, maxLength=null){
-        if (!this.fitted) throw new Error("Tokenizer not fitted. Call fit() first.");
-
+    
+    /**
+     * Transform texts to token indices
+     * @param {string[]} texts - Array of text strings
+     * @param {number|null} maxLength - Pad/truncate to this length
+     * @param {boolean} padToMax - Whether to pad to maxLength (default: true)
+     * @returns {number[][]} Tokenized sequences
+     */
+    transform(texts, maxLength = null, padToMax = true) {
+        if (!this.fitted) {
+            throw new Error("Tokenizer not fitted. Call fit() or fitTransform() first.");
+        }
+        
         return texts.map(text => {
-            const tokens = this.tokenize(text);
-
-            if (maxLength !== null){
-                // Pad or truncate to maxLength
-                if (tokens.length > maxLength){
-                    return tokens.slice(0, maxLength);
-                } else {
-                    return [...tokens, ...Array(maxLength - tokens.length).fill(0)];
-                }
+            const words = this._tokenize(text);
+            let tokens = words.map(word => this.wordToIndex.get(word) || this.UNK_INDEX);
+            
+            // Truncate if maxLength specified
+            if (maxLength !== null && tokens.length > maxLength) {
+                tokens = tokens.slice(0, maxLength);
             }
-
+            
+            // Pad if maxLength specified and padToMax is true
+            if (maxLength !== null && padToMax && tokens.length < maxLength) {
+                tokens = [...tokens, ...Array(maxLength - tokens.length).fill(this.PAD_INDEX)];
+            }
+            
             return tokens;
-        })
+        });
     }
-
-    detokenize(tokens){
-        return tokens.map(token => this.indexToWord.get(token) || '<UNK>').join(' ');
+    
+    /**
+     * Convert token indices back to text
+     * @param {number[]|number[][]} tokens - Single sequence or batch of sequences
+     * @param {boolean} skipPad - Whether to skip PAD tokens (default: true)
+     * @returns {string|string[]} Detokenized text(s)
+     */
+    inverseTransform(tokens, skipPad = true) {
+        if (!this.fitted) {
+            throw new Error("Tokenizer not fitted. Call fit() first.");
+        }
+        
+        // Check if batch or single sequence
+        const isBatch = Array.isArray(tokens[0]);
+        
+        if (isBatch) {
+            return tokens.map(seq => this._detokenize(seq, skipPad));
+        } else {
+            return this._detokenize(tokens, skipPad);
+        }
     }
-
-    detokenizeBatch(tokenBatches){
-        return tokenBatches.map(tokens => this.detokenize(tokens));
+    
+    /**
+     * Get vocabulary as array
+     * @returns {string[]} Vocabulary list
+     */
+    getVocabulary() {
+        if (!this.fitted) return [];
+        
+        const vocab = new Array(this.wordToIndex.size);
+        for (let i = 0; i < this.wordToIndex.size; i++) {
+            vocab[i] = this.indexToWord.get(i);
+        }
+        return vocab;
     }
-
-    getVocabSize(){
+    
+    /**
+     * Get vocabulary size
+     * @returns {number} Number of words in vocabulary
+     */
+    getVocabSize() {
         return this.wordToIndex.size;
     }
-
-    _preprocess(text) {
+    
+    /**
+     * Get word frequency counts
+     * @returns {Map<string, number>} Word frequency map
+     */
+    getWordCounts() {
+        return this.wordCounts ? new Map(this.wordCounts) : null;
+    }
+    
+    /**
+     * Get most common words
+     * @param {number} n - Number of words to return
+     * @returns {Array<{word: string, count: number}>} Most common words
+     */
+    getMostCommon(n = 10) {
+        if (!this.wordCounts) return [];
+        
+        return [...this.wordCounts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, n)
+            .map(([word, count]) => ({ word, count }));
+    }
+    
+    /**
+     * Internal: tokenize text into words
+     * @param {string} text 
+     * @returns {string[]}
+     */
+    _tokenize(text) {
+        // handle contractions and preserve word boundaries
         return text.toLowerCase()
-                  .replace(/[^\w\s]/g, ' ')  // Remove punctuation
-                  .split(/\s+/)             // Split by whitespace
-                  .filter(word => word.length > 0); // Remove empty strings
+            .replace(/([.!?;:,])/g, ' $1 ')           
+            .replace(/\s+/g, ' ')                      
+            .trim()                                     
+            .split(' ')                                
+            .filter(word => word.length > 0 && !/^[.!?;:,]+$/.test(word) || word.length > 1);
+    }
+    
+    /**
+     * Internal: detokenize sequence to text
+     * @param {number[]} tokens 
+     * @param {boolean} skipPad 
+     * @returns {string}
+     */
+    _detokenize(tokens, skipPad = true) {
+        const words = [];
+        
+        for (const token of tokens) {
+            if (skipPad && token === this.PAD_INDEX) {
+                continue;  // Skip padding tokens
+            }
+            
+            const word = this.indexToWord.get(token);
+            if (word && word !== this.PAD_TOKEN) {
+                words.push(word === this.UNK_TOKEN ? '?' : word);
+            } else if (word === undefined) {
+                words.push('?');
+            }
+        }
+        
+        let text = words.join(' ');
+        text = text.replace(/\s+([.!?;:,])/g, '$1');  
+        text = text.replace(/([.!?;:,])\s+/g, '$1 '); 
+        return text.trim();
     }
 }
 
@@ -741,14 +1192,200 @@ export class Tokenizer {
 export class Sigmoid{ constructor(){ this.out=null; } forward(x){ const fn=v=>1/(1+Math.exp(-v)); this.out=x.map(r=>r.map(fn)); return this.out; } backward(grad){ return grad.map((r,i)=>r.map((v,j)=>v*this.out[i][j]*(1-this.out[i][j]))); } }
 export class Tanh{ constructor(){ this.out=null; } forward(x){ this.out=x.map(r=>r.map(v=>Math.tanh(v))); return this.out; } backward(grad){ return grad.map((r,i)=>r.map((v,j)=>v*(1-this.out[i][j]**2))); } }
 export class LeakyReLU{ constructor(alpha=0.01){ this.alpha=alpha; this.out=null; } forward(x){ this.out=x.map(r=>r.map(v=>v>0?v:v*this.alpha)); return this.out; } backward(grad){ return grad.map((r,i)=>r.map((v,j)=>v*(this.out[i][j]>0?1:this.alpha))); } }
-export class GELU{ constructor(){ this.out=null; } forward(x){ const fn=v=>0.5*v*(1+Math.tanh(Math.sqrt(2/Math.PI)*(v+0.044715*v**3))); this.out=x.map(r=>r.map(fn)); return this.out; } backward(grad){ return grad.map((r,i)=>r.map(v=>v*1)); } }
+
+// ---------------------- GELU ----------------------
+export class GELU {
+    constructor() {
+        this.x = null;
+        this.output = null;
+    }
+
+    forward(x) {
+        this.x = x;
+        const sqrt2pi = Math.sqrt(2 / Math.PI);
+        const k = 0.044715;
+        
+        this.output = x.map(row => 
+            row.map(v => {
+                const cube = v * v * v;
+                const inner = sqrt2pi * (v + k * cube);
+                const tanhVal = Math.tanh(inner);
+                return 0.5 * v * (1 + tanhVal);
+            })
+        );
+        return this.output;
+    }
+
+    backward(grad) {
+        const sqrt2pi = Math.sqrt(2 / Math.PI);
+        const k = 0.044715;
+        
+        return grad.map((row, i) => 
+            row.map((gradVal, j) => {
+                const x = this.x[i][j];
+                
+                // Calculate derivative numerically stable
+                const x2 = x * x;
+                const x3 = x2 * x;
+                
+                const inner = sqrt2pi * (x + k * x3);
+                const tanhInner = Math.tanh(inner);
+                const sech2 = 1 - tanhInner * tanhInner;
+                
+                // d(inner)/dx
+                const d_inner = sqrt2pi * (1 + 3 * k * x2);
+                
+                // d(GELU)/dx = 0.5 * (1 + tanh(inner)) + 0.5 * x * sech2(inner) * d_inner
+                const d_gelu = 0.5 * (1 + tanhInner) + 0.5 * x * sech2 * d_inner;
+                
+                return gradVal * d_gelu;
+            })
+        );
+    }
+}
 
 // ---------------------- Dropout ----------------------
-export class Dropout{ constructor(p=0.5){ this.p=p; } forward(x){ return x.map(r=>r.map(v=>v*Math.random()>=this.p?v:0)); } backward(grad){ return grad.map(r=>r.map(v=>v*(1-this.p))); } }
+export class Dropout {
+    constructor(p = 0.5) {
+        this.p = p;
+        this.mask = null;
+        this.training = true;
+        this.scale = null;  // Will be computed when needed
+    }
+    
+    _getScale() {
+        if (this.scale === null) {
+            this.scale = this.p === 1 ? 0 : 1.0 / (1.0 - this.p);
+        }
+        return this.scale;
+    }
+
+    forward(x) {
+        // Handle both 2D and 3D inputs
+        const is3D = x[0] && Array.isArray(x[0][0]);
+        
+        if (!this.training || this.p === 0) {
+            // Deep copy based on dimension
+            if (is3D) {
+                return x.map(sample => sample.map(row => [...row]));
+            }
+            return x.map(row => [...row]);
+        }
+        
+        const scale = this._getScale();
+        
+        if (is3D) {
+            // Handle 3D input [batch, channels, features]
+            this.mask = x.map(sample => 
+                sample.map(row => 
+                    row.map(() => Math.random() >= this.p ? 1 : 0)
+                )
+            );
+            
+            return x.map((sample, i) => 
+                sample.map((row, j) => 
+                    row.map((v, k) => v * this.mask[i][j][k] * scale)
+                )
+            );
+        } else {
+            // Handle 2D input [batch, features]
+            this.mask = x.map(row => 
+                row.map(() => Math.random() >= this.p ? 1 : 0)
+            );
+            
+            return x.map((row, i) => 
+                row.map((v, j) => v * this.mask[i][j] * scale)
+            );
+        }
+    }
+
+    backward(grad) {
+        if (!this.training || this.p === 0 || !this.mask) {
+            // Deep copy gradient based on dimension
+            const is3D = grad[0] && Array.isArray(grad[0][0]);
+            if (is3D) {
+                return grad.map(sample => sample.map(row => [...row]));
+            }
+            return grad.map(row => [...row]);
+        }
+        
+        const scale = this._getScale();
+        const is3D = grad[0] && Array.isArray(grad[0][0]);
+        
+        if (is3D) {
+            return grad.map((sample, i) => 
+                sample.map((row, j) => 
+                    row.map((v, k) => v * this.mask[i][j][k] * scale)
+                )
+            );
+        } else {
+            return grad.map((row, i) => 
+                row.map((v, j) => v * this.mask[i][j] * scale)
+            );
+        }
+    }
+
+    train() {
+        this.training = true;
+    }
+
+    eval() {
+        this.training = false;
+    }
+}
 
 // ---------------------- Losses ----------------------
-export class MSELoss{ forward(pred,target){ this.pred=pred; this.target=target; const losses=pred.map((row,i)=>row.reduce((sum,v,j)=>sum+(v-target[i][j])**2,0)/row.length); return losses.reduce((a,b)=>a+b,0)/pred.length; } backward(){ return this.pred.map((row,i)=>row.map((v,j)=>2*(v-this.target[i][j])/row.length)); } }
-export class CrossEntropyLoss{ forward(pred,target){ this.pred=pred; this.target=target; const losses=pred.map((p,i)=>crossEntropy(softmax(p),target[i])); return losses.reduce((a,b)=>a+b,0)/pred.length; } backward(){ return this.pred.map((p,i)=>{ const s=softmax(p); return s.map((v,j)=>(v-this.target[i][j])/this.pred.length); }); } }
+export class MSELoss {
+    forward(pred, target) {
+        this.pred = pred;
+        this.target = target;
+        this.batchSize = pred.length;
+        this.featureSize = pred[0].length;
+        
+        let totalLoss = 0;
+        for (let i = 0; i < this.batchSize; i++) {
+            let sampleLoss = 0;
+            for (let j = 0; j < this.featureSize; j++) {  // ← pake this.featureSize
+                const diff = pred[i][j] - target[i][j];
+                sampleLoss += diff * diff;
+            }
+            totalLoss += sampleLoss / this.featureSize;
+        }
+        
+        this.loss = totalLoss / this.batchSize;
+        return this.loss;
+    }
+    
+    backward() {
+        const grad = Array(this.batchSize);
+        
+        for (let i = 0; i < this.batchSize; i++) {
+            grad[i] = Array(this.featureSize);
+            for (let j = 0; j < this.featureSize; j++) {
+                grad[i][j] = 2 * (this.pred[i][j] - this.target[i][j]) / this.batchSize;
+            }
+        }
+        
+        return grad;
+    }
+}
+
+export class CrossEntropyLoss{
+	constructor() {
+		console.warn(
+			'[JST WARN]: CrossEntrpyLoss is deprecated. ' +
+			'Use SoftmaxCrossEntropyLoss instead for better numerical stability.'
+		);
+		this._impl = new SoftmaxCrossEntropyLoss();
+	}
+	
+	forward(logits, targets){
+		return this._impl.forward(logits, targets);
+	}
+	backward(){
+		return this._impl.backward();
+	}
+}
 
 export class SoftmaxCrossEntropyLoss {
   forward(logits, targets) {
@@ -816,7 +1453,6 @@ export class BCEWithLogitsLoss {
 // ---------------------- Optimizers ----------------------
 export class Adam{
     constructor(params, lr = 0.001, b1 = 0.9, b2 = 0.999, eps = 1e-8, max_grad_norm = 1.0){
-        // Handle both parameter styles: (params, lr) OR (params, {lr, ...})
         if (typeof lr === 'object') {
             // Options object provided
             const options = lr;
@@ -873,7 +1509,7 @@ export class Adam{
     }
 }
 
-// ---------------------- AdamW Optimizer ----------------------
+// ---------------------- AdamW ----------------------
 export class AdamW {
     constructor(params, options = {}) {
         const {
@@ -983,9 +1619,9 @@ export class LION {
         this.params = params;
         
         const {
-            lr = 0.0001,      // Lions typically uses smaller LR
-            beta1 = 0.9,      // First moment decay
-            beta2 = 0.99,     // Second moment decay  
+            lr = 0.0001,      
+            beta1 = 0.9,      
+            beta2 = 0.99,      
             weight_decay = 0, // L2 regularization
             eps = 1e-8        // Numerical stability
         } = options;
@@ -1264,7 +1900,7 @@ export class SiLU {
 }
 
 
-// ---------------------- BatchNorm2D ----------------------
+// ---------------------- BatchNorm2D (BETA) ----------------------
 export class BatchNorm2d {
     constructor(numFeatures, eps=1e-5, momentum=0.1, affine=true) {
         this.numFeatures = numFeatures;
@@ -1477,12 +2113,12 @@ export class BatchNorm2d {
     eval() { this.training = false; }
 }
 
-// ---------------------- Model Save/Load ----------------------
+// ---------------------- Model Save/Load (BETA) ----------------------
 export function saveModel(model){
     if(!(model instanceof Sequential)) throw new Error("saveModel supports only Sequential");
     const weights=model.layers.map(layer=>({weights:layer.W||null,biases:layer.b||null}));
     return JSON.stringify(weights);
-	/* Didn't expect this to work /: */
+	/* Didn't expect this to work */
 }
 
 export function loadModel(model,json){
@@ -1492,7 +2128,7 @@ export function loadModel(model,json){
         if(layer.W && weights[i].weights) layer.W=weights[i].weights;
         if(layer.b && weights[i].biases) layer.b=weights[i].biases;
     });
-	/* Didn't expect this to work /: */
+	/* Didn't expect this to work */
 }
 
 // ---------------------- Advanced Utils ----------------------
@@ -1507,4 +2143,40 @@ export function reshape(tensor, rows, cols) {
         flat.slice(i*cols, i*cols + cols)
     );
     return out;
+}
+
+export function toFloat32(matrix) {
+    const rows = matrix.length, cols = matrix[0].length;
+    const flat = new Float32Array(rows * cols);
+    for (let i = 0; i < rows; i++)
+        for (let j = 0; j < cols; j++)
+            flat[i * cols + j] = matrix[i][j];
+    return flat;
+}
+
+export function fromFloat32(flat, rows, cols) {
+    const matrix = Array(rows);
+    for (let i = 0; i < rows; i++) {
+        matrix[i] = Array(cols);
+        for (let j = 0; j < cols; j++)
+            matrix[i][j] = flat[i * cols + j];
+    }
+    return matrix;
+}
+
+export function fastDot(a, b) {
+    const m = a.length, k = a[0].length, n = b[0].length;
+    const aFlat = toFloat32(a);
+    const bFlat = toFloat32(b);
+    const res = new Float32Array(m * n);
+    
+    for (let i = 0; i < m; i++)
+        for (let j = 0; j < n; j++) {
+            let sum = 0;
+            for (let l = 0; l < k; l++)
+                sum += aFlat[i * k + l] * bFlat[l * n + j];
+            res[i * n + j] = sum;
+        }
+    
+    return fromFloat32(res, m, n);
 }

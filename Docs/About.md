@@ -79,5 +79,6 @@ This section lists commonly used abbreviations and keywords within the mini-jsto
 - `"Exp"` : Restricted experimental entity  
 - `"msg"` : Message, comment, warning, announcement  
 - `"donot"` : Do not / Don't  
+// add more.
 
 ---

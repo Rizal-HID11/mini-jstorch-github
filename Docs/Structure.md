@@ -13,6 +13,8 @@ mini-jstorch/
 │   ├── fu_fun.js
 │   ├── MakeModel.js
 │   └── scheduler.js
+        xor_classification.js
+        linear_regression.js
 ├── Docs/
 │   ├── About.md
 │   └── Structure.md
@@ -69,21 +71,6 @@ mini-jstorch/
 ---
 
 ## File Descriptions
-
-`/demo/fu_fun.js`
-
-- Purpose: Tests all user-facing (`fu_`) functions
-- Notes: Focuses on friendly and predictable helper utilities
-
-`/demo/MakeModel.js`
-
-- Purpose: Demonstrates creation of a simple model
-- Notes: Uses the `StepLR` scheduler as part of the example workflow
-
-`/demo/scheduler.js`
-
-- Purpose: Tests scheduler-related functionality
-- Notes: Intended to validate learning rate scheduling behavior
 
 `/Docs/About.md`
 

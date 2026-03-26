@@ -1,17 +1,26 @@
-## Mini-JSTorch
+## Mini-JSTorch (MAJOR UPDATE)
 
+---
 
 Mini-JSTorch is a lightweight, `dependency-free` JavaScript neural network library designed for `education`, `experimentation`, and `small-scale models`.
 It runs in Node.js and modern browsers, with a simple API inspired by PyTorch-style workflows.
 
 This project prioritizes `clarity`, `numerical correctness`, and `accessibility` over performance or large-scale production use.
 
-In this version `1.8.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCEWithLogitsLoss**
+In this version `2.0.0`, we introduce:
+- **Fixed Linear layer cache** (critical bug fix for training)
+- **Fixed GELU gradient calculation**
+- **Fixed MSELoss gradient scaling**
+- **Optimized Softmax gradient** (O(n²) → O(n))
+- **Improved Tokenizer** with proper PAD/UNK separation
+- **Added Sequential.zeroGrad(), train(), eval(), stateDict() methods**
 
-# NOTICE
-All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/mini-jstorch` with some minor refactoring.
+---
 
-**WARNING:** Expect potential compatibility issues in certain modules when running in the GitHub environment.
+**⚠️ BREAKING CHANGES in v2.0.0:**
+- Tokenizer API: `tokenizeBatch()` → `transform()`, `detokenizeBatch()` → `inverseTransform()`
+- Tokenizer now uses `<PAD>` at index 0 and `<UNK>` at index 1
+- MSELoss gradient scale now matches PyTorch behavior
 
 ---
 
@@ -26,9 +35,7 @@ All source code for `mini-jstorch-github` was pulled from `npmjs.com/package/min
 - running simple training loops in the browser
 - environments where large frameworks are unnecessary or unavailable
 
-`Mini-JSTorch is NOT a replacement for PyTorch, TensorFlow, or TensorFlow.js.`
-
-`It is intentionally scoped to remain small, readable, and easy to debug.`
+`mini-jstorch is intentionally designed to be small, readable, and easy to debug.`
 
 ---
 
@@ -139,7 +146,7 @@ In Browser/Website:
 # Loss Functions
 
 - MSELoss
-- CrossEntropyLoss (*legacy*)
+- CrossEntropyLoss (*legacy*, use **SoftmaxCrossEntropy** instead)
 - SoftmaxCrossEntropyLoss (**recommended**)
 - BCEWithLogitsLoss (**recommended**)
 
@@ -156,7 +163,7 @@ In Browser/Website:
 - LambdaLR
 - ReduceLROnPlateau
 - Regularization
-- Dropout (*basic*, *educational*)
+- Dropout
 - BatchNorm2D (*experimental*)
 
 # Utilities
@@ -180,16 +187,22 @@ In Browser/Website:
 
 # Installation 
 
+## Node.js
 ```bash
 npm install mini-jstorch
 ```
 Node.js v18+ or any modern browser with ES module support is recommended.
 
+## Git
+```bash
+git clone https://github.com/Rizal-HID11/mini-jstorch-github
+```
+
 ---
 
 # Quick Start (Recommended Loss)
 
-# Multi-class Classification (SoftmaxCrossEntropy)
+## Multi-class Classification (SoftmaxCrossEntropy)
 
 ```javascript
 import {
@@ -201,9 +214,9 @@ import {
 } from "./src/jstorch.js";
 
 const model = new Sequential([
-  new Linear(2, 4),
+  new Linear(2, 8),
   new ReLU(),
-  new Linear(4, 2) // logits output
+  new Linear(8, 2) // logits output
 ]);
 
 const X = [
@@ -215,7 +228,7 @@ const Y = [
 ];
 
 const lossFn = new SoftmaxCrossEntropyLoss();
-const optimizer = new Adam(model.parameters(), 0.1);
+const optimizer = new Adam(model.parameters(), {lr: 0.1});
 
 for (let epoch = 1; epoch <= 300; epoch++) {
   const logits = model.forward(X);
@@ -223,15 +236,18 @@ for (let epoch = 1; epoch <= 300; epoch++) {
   const grad = lossFn.backward();
   model.backward(grad);
   optimizer.step();
+  
+  // Zero gradients for next iteration
+  model.zeroGrad();
 
   if (epoch % 50 === 0) {
-    console.log(`Epoch ${epoch}, Loss: ${loss.toFixed(4)}`);
+    console.log(`Epoch ${epoch}, Loss: ${loss.toFixed(6)}`);
   }
 }
 ```
-Do not combine `SoftmaxCrossEntropyLoss` with a `Softmax` layer.
+`Important:` Do not combine `SoftmaxCrossEntropyLoss` with a `Softmax` layer.
 
-# Binary Classifiaction (BCEWithLogitsLoss)
+## Binary Classifiaction (BCEWithLogitsLoss)
 
 ```javascript
 import {
@@ -243,21 +259,20 @@ import {
 } from "./src/jstorch.js";
 
 const model = new Sequential([
-  new Linear(2, 4),
+  new Linear(2, 8),
   new ReLU(),
-  new Linear(4, 1) // logit
+  new Linear(8, 1) // logit output
 ]);
 
 const X = [
   [0,0], [0,1], [1,0], [1,1]
 ];
-
 const Y = [
   [0], [1], [1], [0]
 ];
 
 const lossFn = new BCEWithLogitsLoss();
-const optimizer = new Adam(model.parameters(), 0.1);
+const optimizer = new Adam(model.parameters(), {lr: 0.1});
 
 for (let epoch = 1; epoch <= 300; epoch++) {
   const logits = model.forward(X);
@@ -265,16 +280,47 @@ for (let epoch = 1; epoch <= 300; epoch++) {
   const grad = lossFn.backward();
   model.backward(grad);
   optimizer.step();
+  model.zeroGrad();
+  
+  // Print progress every 50 epochs
+  if (epoch % 50 === 0) {
+    const probs = logits.map(p => 1 / (1 + Math.exp(-p[0])));
+    console.log(`Epoch ${epoch} | Loss: ${loss.toFixed(6)}`);
+    probs.forEach((prob, i) => {
+      const pred = prob > 0.5 ? 1 : 0;
+      console.log(`  [${X[i]}] → prob: ${prob.toFixed(4)} (${pred}) | target: ${Y[i][0]}`);
+    });
+    console.log('');
+  }
 }
+
+// Final evaluation
+console.log("\nTraining Complete\n");
+model.eval(); 
+
+const finalLogits = model.forward(X);
+const finalProbs = finalLogits.map(p => 1 / (1 + Math.exp(-p[0])));
+
+console.log("Final Results:");
+let correct = 0;
+finalProbs.forEach((prob, i) => {
+  const pred = prob > 0.5 ? 1 : 0;
+  const target = Y[i][0];
+  const isCorrect = pred === target;
+  if (isCorrect) correct++;
+  console.log(`  [${X[i]}] → ${prob.toFixed(4)} (${pred}) | target: ${target} ${isCorrect ? '✓' : '✗'}`);
+});
+console.log(`\nAccuracy: ${(correct / X.length * 100).toFixed(2)}%`);
 ```
-Do not combine `BCEWithLogitsLoss` with a `Sigmoid` layer.
+`Important:` Do not combine `BCEWithLogitsLoss` with a `Sigmoid` layer.
 
 ---
 
 # Save & Load Models 
 
 ```javascript
-import { saveModel, loadModel, Sequential } from "mini-jstorch";
+// WARN: Error/Bug may be expected for this time!
+import { saveModel, loadModel, Sequential } from "./src/jstorch.js";
 
 const json = saveModel(model);
 const model2 = new Sequential([...]); // same architecture
@@ -285,16 +331,18 @@ loadModel(model2, json);
 
 # Demos
 
-See the `demo/` directory for runnable examples:
-- `demo/MakeModel.js` – simple training loop
-- `demo/scheduler.js` – learning rate schedulers
-- `demo/fu_fun.js` – utility functions
+See the `demo/` directory for runnable examples!
+- `demo/fu_fun.js`
+- `demo/MakeModel.js`
+- `demo/scheduler.js`
+- `demo/xor_classification.js`
+- `demo/linear_regression.js`
+
 
 ```bash
-node demo/MakeModel.js
-node demo/scheduler.js
-node demo/fu_fun.js
+node demo/<fileNameInDemo>.js
 ```
+**Make sure your directory while run this at root folder!**
 
 ---
 
@@ -307,15 +355,6 @@ node demo/fu_fun.js
 - Not intended for large-scale or production ML workloads
 
 ---
-
-# Intended Use Cases
-
-- Learning how neural networks work internally
-- Teaching ML fundamentals
-- Small experiments in Node.js or the browser
-- Lightweight AI demos without GPU or large frameworks
-
---- 
 
 # License
 
