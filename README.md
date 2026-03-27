@@ -14,8 +14,6 @@ In this version `2.0.0`, we introduce:
 - **Optimized Softmax gradient** (O(n²) → O(n))
 - **Improved Tokenizer** with proper PAD/UNK separation
 - **Added Sequential.zeroGrad(), train(), eval(), stateDict() methods**
-=======
-In this version `1.0.0`, we Introduce the **SoftmaxCrossEntropyLoss**, and **BCEWithLogitsLoss**
 
 ---
 
